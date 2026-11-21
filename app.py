@@ -257,6 +257,50 @@ def timing_html(parts) -> str:
     return '<span class="tm">⏱ ' + " · ".join(out) + "</span>"
 
 
+# ───────────── 오늘 고가·저가가 나온 시각 ─────────────
+# 하루는 한국시간 오전 9시에 시작 → 시가 시각은 항상 09:00
+# 60분봉으로 몇 시인지 찾고, 그 1시간의 1분봉으로 몇 분인지 찾음 (코인 하나에 요청 최대 3번)
+def _kst(c) -> pd.Timestamp:
+    return pd.Timestamp(c["candle_date_time_kst"])
+
+
+@st.cache_data(ttl=300, show_spinner=False)     # 5분 동안 저장
+def hl_times(key: str):
+    """{'h': '03:15', 'l': '10:42'} — 못 구하면 빈 칸"""
+    xch, m = key.split(":", 1)
+    now = pd.Timestamp.now(tz="Asia/Seoul").tz_localize(None)
+    s0 = now.normalize() + pd.Timedelta(hours=9)
+    if now < s0:
+        s0 -= pd.Timedelta(days=1)                 # 오전 9시 전이면 어제 9시부터가 '오늘'
+    hours = [c for c in _get(xch, f"/v1/candles/minutes/60", {"market": m, "count": 25}) if _kst(c) >= s0]
+    out = {}
+    if not hours:
+        return out
+    for k, f, pick in (("h", "high_price", max), ("l", "low_price", min)):
+        hc = pick(hours, key=lambda c: _num(c.get(f)) or (0 if pick is max else 1e30))
+        t = _kst(hc)
+        try:                                       # 그 1시간 안에서 1분봉으로 정확한 분 찾기
+            to = (pd.Timestamp(hc["candle_date_time_utc"]) + pd.Timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+            mins = [c for c in _get(xch, "/v1/candles/minutes/1", {"market": m, "count": 60, "to": to})
+                    if t <= _kst(c) < t + pd.Timedelta(hours=1)]
+            if mins:
+                t = _kst(pick(mins, key=lambda c: _num(c.get(f)) or (0 if pick is max else 1e30)))
+        except Exception:
+            pass
+        out[k] = t.strftime("%H:%M")
+    return out
+
+
+def all_hl_times(codes: tuple, timeout: float = 20) -> dict:
+    """리스트 코인들의 고가·저가 시각을 동시에 구함 (20초 안에 못 구한 코인은 빈 칸)"""
+    from concurrent.futures import wait
+    ex = ThreadPoolExecutor(max_workers=3)
+    futs = {ex.submit(hl_times, c): c for c in codes}
+    wait(futs, timeout=timeout)
+    ex.shutdown(wait=False, cancel_futures=True)
+    return {c: f.result() for f, c in futs.items() if f.done() and not f.exception()}
+
+
 def list_signals(codes: tuple):
     """리스트 종목들의 매수·매도 신호 {코드: 'buy'/'sell'/None}, 시세를 받은 종목 수"""
     days = max(int(calc), 180)
@@ -337,6 +381,7 @@ LIST_CSS = """<style>
 .sl-wrap tr:nth-child(even) td{background:#fafbfc}
 .sl-wrap tbody tr:hover td{background:#eef4ff}
 .sl-wrap td.sg{text-align:center;font-weight:800;min-width:76px}.sl-wrap td.sg.buy{color:#e5484d}.sl-wrap td.sg.sell{color:#1a56db}.sl-wrap td.sg.wait{color:#bbb;font-weight:400}
+.sl-wrap .hm{font-size:11px;color:#999;font-weight:400}
 .sl-wrap .up{color:#e5484d}.sl-wrap .dn{color:#1a56db}.sl-wrap .eq{color:#333}
 @media (max-width:600px){
  .sl-top a.tab{min-width:80px;padding:7px 10px;font-size:15px}
@@ -358,6 +403,7 @@ XNAME = EXCH[XCH][0]
 if not qp.get("code"):
     if qp.get("refresh"):                                         # ↻ 새로고침을 눌렀음 → 시세 다시 받기
         top_list.clear()
+        hl_times.clear()
         with _store()["lock"]:
             _store()["data"].clear()
         del st.query_params["refresh"]
@@ -375,7 +421,8 @@ if not qp.get("code"):
         st.markdown(f'<a href="{link(x=other)}" target="_self">→ {EXCH[other][0]}로 보기</a>', unsafe_allow_html=True)
         st.stop()
 
-    def build(sig, tm=""):
+    def build(sig, tm="", hm=None):
+        hm = hm or {}
         h = [LIST_CSS, '<div class="sl-top">']
         for k_, (label, _) in EXCH.items():
             h.append(f'<a class="tab{" on" if k_ == XCH else ""}" href="{link(x=k_)}" target="_self">{label}</a>')
@@ -384,12 +431,15 @@ if not qp.get("code"):
         h.append(f'<span class="asof"><span class="pc">24시간 거래대금 TOP{TOP_N} · </span>기준 {asof}<span class="pc"> (한국시간)</span></span></div>')
         h.append('<div class="sl-wrap"><table><thead><tr><th class="rk">순위</th>'
                  '<th class="nm">코인</th><th>신호</th><th>현재가(원)</th><th>대비</th><th>등락률</th>'
-                 '<th>거래대금</th><th>시가</th><th>고가</th><th>저가</th></tr></thead><tbody>')
+                 '<th>거래대금</th><th>시가(시간)</th><th>고가(시간)</th><th>저가(시간)</th></tr></thead><tbody>')
         for i, (m, kr, sym, close, chg, pct, op, hi, lo, tv, prev) in enumerate(rows, 1):
             key = f"{XCH}:{m}"
             href = html.escape(link(code=m, name=kr, x=XCH))
             a = f'<a href="{href}" target="_self">'
             d = dec_of(close)
+            tt = hm.get(key, {})
+            def when(t):                                       # 가격 옆 작은 회색 (시:분)
+                return f' <span class="hm">({t})</span>' if t else ""
             k = "eq" if pct is None else ("up" if pct > 0 else ("dn" if pct < 0 else "eq"))
             arrow = "" if not pct else ("▲ " if pct > 0 else "▼ ")
             pct_t = "-" if pct is None else f"{pct:+.2f}%" if pct else "0.00%"
@@ -409,9 +459,9 @@ if not qp.get("code"):
                 f'<td class="{k}">{a}{arrow}{px(None if chg is None else abs(chg), d)}</a></td>'
                 f'<td class="{k}">{a}{pct_t}</a></td>'
                 f'<td class="tv">{a}{money(tv)}</a></td>'
-                f'<td class="{ud(op, prev)}">{a}{px(op, d)}</a></td>'
-                f'<td class="{ud(hi, prev)}">{a}{px(hi, d)}</a></td>'
-                f'<td class="{ud(lo, prev)}">{a}{px(lo, d)}</a></td></tr>')
+                f'<td class="{ud(op, prev)}">{a}{px(op, d)}{when("09:00")}</a></td>'
+                f'<td class="{ud(hi, prev)}">{a}{px(hi, d)}{when(tt.get("h"))}</a></td>'
+                f'<td class="{ud(lo, prev)}">{a}{px(lo, d)}{when(tt.get("l"))}</a></td></tr>')
         h.append('</tbody></table></div>')
         return "".join(h)                             # 줄바꿈 없이 한 덩어리로 넣어야 표가 깨지지 않음
 
@@ -424,6 +474,8 @@ if not qp.get("code"):
     if len(known) < len(codes):
         note.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
     _t0 = time.time()
+    _hx = ThreadPoolExecutor(max_workers=1)                  # 고가·저가 시각은 신호 계산과 동시에 구함
+    _hf = _hx.submit(all_hl_times, codes)
     try:
         sig, _got, t_fetch, t_calc = list_signals(codes)
     except Exception as e:
@@ -432,9 +484,14 @@ if not qp.get("code"):
     note.empty()
     if _got < len(rows):          # 시세를 다 못 받았으면 알려줌 (빈칸 = 계산 못 한 코인 포함)
         st.caption(f"※ {len(rows)}개 중 {_got}개만 시세를 받아 신호를 계산했습니다 ({time.time() - _t0:.0f}초).")
-    _tm = timing_html([("리스트", t_list), ("시세", t_fetch), ("계산", t_calc)])
-    ph.markdown(build(sig, _tm), unsafe_allow_html=True)      # ② 신호 칸 + 걸린 시간 채워서 표시
-    st.caption("※ 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. 일봉은 한국시간 오전 9시 기준입니다.")
+    try:
+        hm = _hf.result(timeout=25)
+    except Exception:
+        hm = {}
+    _hx.shutdown(wait=False)
+    _tm = timing_html([("리스트", t_list), ("시세", t_fetch), ("계산", t_calc), ("전체", time.time() - _t0)])
+    ph.markdown(build(sig, _tm, hm), unsafe_allow_html=True)      # ② 신호 칸 + 걸린 시간 채워서 표시
+    st.caption("※ 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. 일봉은 한국시간 오전 9시 기준이라 시가 시각은 항상 09:00입니다.")
     st.stop()
 
 
