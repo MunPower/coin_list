@@ -647,8 +647,8 @@ st.markdown(
     '.hd-lines{display:flex;flex-direction:column;gap:10px}'
     '.hd-lbl{font-size:15px;color:#111;line-height:1.4;text-align:center;white-space:nowrap}'
     '.hd-sig{font-size:24px;font-weight:800;line-height:1.2;white-space:nowrap}'
-    '.hd-wrap{display:flex;align-items:flex-start;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}'
-    '.cv-box{margin-left:auto;padding-top:2px;padding-right:4px}'
+    '.hd-wrap{display:flex;align-items:flex-end;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}'
+    '.cv-box{margin-left:auto;padding-right:4px;padding-bottom:2px}'
     '@media (max-width:600px){'
     '.hd-row{gap:10px}.hd-big{font-size:30px}.hd-chg{font-size:14px}'
     '.hd-lbl{font-size:12px}.hd-sig{font-size:17px}.cv-box{margin-left:0;width:100%}}'
@@ -744,17 +744,24 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
   // 위쪽 시세 줄 오른쪽 빈자리(cv-box)에 넣음. 못 찾으면 차트 오른쪽 위에 표시
   var HD=document, host=null;
   try{ host=window.parent.document.querySelector('.cv-box'); if(host){HD=window.parent.document; host.innerHTML='';} }catch(eh){host=null; HD=document;}
+  // 상자 = [글씨 칸(비교 요약·범례)] + [버튼 칸]. 버튼 칸은 오른쪽 끝에 따로 고정 → 글씨 길이가 바뀌어도 버튼은 안 움직임
+  var outer=HD.createElement('div');
+  outer.style.cssText=(host?'':'position:absolute;top:2px;right:4px;z-index:55;')+'max-width:100%;'
+    +'display:flex;align-items:flex-end;justify-content:flex-end;gap:14px;';
+  (host||gd).appendChild(outer);
   var box=HD.createElement('div');
-  box.style.cssText=(host?'':'position:absolute;top:2px;right:4px;z-index:55;')+'max-width:100%;'
-    +'display:flex;flex-direction:column;align-items:flex-start;gap:2px;';
-  (host||gd).appendChild(box);
+  box.style.cssText='display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;';
+  outer.appendChild(box);
+  var bcol=HD.createElement('div');
+  bcol.style.cssText='display:flex;align-items:center;gap:6px;flex:none;';
+  outer.appendChild(bcol);
   function bk(css){var d=HD.createElement('div'); d.style.cssText='display:none;'+css; box.appendChild(d); return d;}
   var sm=bk('font:600 12px sans-serif;white-space:nowrap;');                 // 비교 코인 대비 요약
   var dt=bk('font:11px sans-serif;color:#666;white-space:normal;line-height:1.35;');   // 시가·저가·종가·비교 코인
   var ig=bk('font:600 11px sans-serif;color:#00a651;white-space:nowrap;');   // 비교 코인 값(녹색)
   if(IDX){sm.style.display='block'; dt.style.display='block'; ig.style.display='block';}
   var brow=HD.createElement('div');
-  brow.style.cssText='display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;pointer-events:auto;';
+  brow.style.cssText='margin-top:2px;line-height:1.35;';
   brow.innerHTML='<span style="font:11px sans-serif;color:#111;white-space:nowrap;margin-right:4px">'
     +'<span style="color:#e5484d">▮</span><span style="color:#3b6fd4">▮</span> 종가 캔들&nbsp; ━ 곡선&nbsp; '
     +'<span style="color:#1a56db">━ 상한</span>&nbsp; <span style="color:#e5484d">━ 하한</span></span>';
@@ -893,7 +900,7 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
     ['touchstart','touchmove','touchend','mousedown','mousemove','dblclick'].forEach(function(n){
       b.addEventListener(n,function(e){e.stopPropagation();},{passive:true});});
     b.addEventListener('click',function(e){e.stopPropagation();fn();});
-    brow.appendChild(b);
+    bcol.appendChild(b);
     return b;
   }
   if(IDX){                                  // 비교선 켜기/끄기 버튼 (버튼 글자 = 비교 코인 이름)
@@ -992,11 +999,12 @@ def finish(fig, low_label):
                      ticktext=[pd.to_datetime(dates[i]).strftime("%m.%d") for i in pos],
                      tickangle=0, tickfont=dict(size=11, color="#555"),
                      showgrid=True, gridcolor="#f0b8b8", gridwidth=1,
-                     showline=False, zeroline=False)
+                     showline=True, mirror=True, linecolor="#9aa3ae", linewidth=1, zeroline=False)   # 차트 영역 테두리
     fig.update_xaxes(showticklabels=True, row=1, col=1)    # 날짜는 위 차트 아래(두 차트 사이)에 표시
     fig.update_xaxes(showticklabels=False, row=2, col=1)
     fig.update_yaxes(side="right", tickformat=f",.{DEC}f", tickfont=dict(size=11, color="#555"),
-                     showgrid=True, gridcolor="#eeeeee", zeroline=False, showline=False, ticks="")
+                     showgrid=True, gridcolor="#eeeeee", zeroline=False, ticks="",
+                     showline=True, mirror=True, linecolor="#9aa3ae", linewidth=1)
     fig.update_yaxes(nticks=4, tickformat=f",.{min(DEC + 1, 6)}f", row=2, col=1)
     tagc = "#e5484d" if chg > 0 else "#3b6fd4"
     # 현재가 태그(오른쪽 축)
