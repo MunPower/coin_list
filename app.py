@@ -647,11 +647,13 @@ st.markdown(
     '.hd-lines{display:flex;flex-direction:column;gap:10px}'
     '.hd-lbl{font-size:15px;color:#111;line-height:1.4;text-align:center;white-space:nowrap}'
     '.hd-sig{font-size:24px;font-weight:800;line-height:1.2;white-space:nowrap}'
+    '.hd-wrap{display:flex;align-items:flex-start;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}'
+    '.cv-box{margin-left:auto;padding-top:2px;padding-right:4px}'
     '@media (max-width:600px){'
     '.hd-row{gap:10px}.hd-big{font-size:30px}.hd-chg{font-size:14px}'
-    '.hd-lbl{font-size:12px}.hd-sig{font-size:17px}}'
+    '.hd-lbl{font-size:12px}.hd-sig{font-size:17px}.cv-box{margin-left:0;width:100%}}'
     '</style>'
-    '<div class="hd-row">'
+    '<div class="hd-wrap"><div class="hd-row">'
     '<div>'
     f'<div class="hd-px"><span class="hd-big" style="color:{col}">{px(last, DEC)}원</span>'
     f'<span class="hd-chg" style="color:{col}">{arrow} {px(abs(chg), DEC)} &nbsp; {pct:+.2f}%</span></div>'
@@ -662,7 +664,7 @@ st.markdown(
     f'<div class="hd-lbl" data-ul="1" style="color:#e5484d;font-weight:600">매수선<br>(<span data-k="l">{px(_lo, DEC)}</span>)</div>'
     '</div>'
     f'{_sig}'
-    '</div>',
+    '</div><div class="cv-box"></div></div>',      # cv-box: 차트가 비교 정보·범례·버튼을 여기에 채움
     unsafe_allow_html=True)
 
 # ───────────── 차트 ─────────────
@@ -739,16 +741,19 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
   var pr=mk(lab+'transform:translateY(-50%);');
   function f2(v){return Number(v).toLocaleString('en-US',{minimumFractionDigits:DECI,maximumFractionDigits:DECI});}
   // 오른쪽 위 상자: 비교 요약 3줄 → 범례 + [비교 코인][＋][－] 버튼
-  var box=document.createElement('div');
-  box.style.cssText='position:absolute;top:2px;right:4px;max-width:calc(100% - 8px);z-index:55;pointer-events:none;'
+  // 위쪽 시세 줄 오른쪽 빈자리(cv-box)에 넣음. 못 찾으면 차트 오른쪽 위에 표시
+  var HD=document, host=null;
+  try{ host=window.parent.document.querySelector('.cv-box'); if(host){HD=window.parent.document; host.innerHTML='';} }catch(eh){host=null; HD=document;}
+  var box=HD.createElement('div');
+  box.style.cssText=(host?'':'position:absolute;top:2px;right:4px;z-index:55;')+'max-width:100%;'
     +'display:flex;flex-direction:column;align-items:flex-start;gap:2px;';
-  gd.appendChild(box);
-  function bk(css){var d=document.createElement('div'); d.style.cssText='display:none;'+css; box.appendChild(d); return d;}
+  (host||gd).appendChild(box);
+  function bk(css){var d=HD.createElement('div'); d.style.cssText='display:none;'+css; box.appendChild(d); return d;}
   var sm=bk('font:600 12px sans-serif;white-space:nowrap;');                 // 비교 코인 대비 요약
   var dt=bk('font:11px sans-serif;color:#666;white-space:normal;line-height:1.35;');   // 시가·저가·종가·비교 코인
   var ig=bk('font:600 11px sans-serif;color:#00a651;white-space:nowrap;');   // 비교 코인 값(녹색)
   if(IDX){sm.style.display='block'; dt.style.display='block'; ig.style.display='block';}
-  var brow=document.createElement('div');
+  var brow=HD.createElement('div');
   brow.style.cssText='display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;pointer-events:auto;';
   brow.innerHTML='<span style="font:11px sans-serif;color:#111;white-space:nowrap;margin-right:4px">'
     +'<span style="color:#e5484d">▮</span><span style="color:#3b6fd4">▮</span> 종가 캔들&nbsp; ━ 곡선&nbsp; '
@@ -782,7 +787,7 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
                     ? (compareValue / base - 1) * 100 : NaN;
         var color = !isFinite(pct) || Math.abs(pct) < 0.0000001 ? '#000000' : (pct > 0 ? '#e5484d' : '#3b6fd4');
         var pctText = isFinite(pct) ? (pct > 0 ? '+' : '') + pct.toFixed(2) + '%' : '—';
-        return '<span style="color:'+color+'">'+label+' '+pxs(value)+' ('+pctText+')</span>';
+        return '<span style="color:'+color+'">'+label+' '+f2(value)+' ('+pctText+')</span>';
       }
       var prevRawIndex = D > 0 ? R[D-1] : NaN;
       row2 = '<span style="color:#000000">시가 '+pxs(OPEN[D])+'</span> · ' +
@@ -881,7 +886,7 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
 
   // ── 확대/축소 버튼 (두 손가락 확대가 막히는 폰용) ──
   function btn(txt,fn,w,fs){
-    var b=document.createElement('div'); b.textContent=txt;
+    var b=HD.createElement('div'); b.textContent=txt;
     b.style.cssText=(w?'padding:0 10px;':'width:32px;')+'height:28px;line-height:28px;text-align:center;white-space:nowrap;'
       +'font:600 '+(fs||16)+'px sans-serif;background:#f3f3f3;border:1px solid #ccc;border-radius:5px;cursor:pointer;'
       +'touch-action:manipulation;user-select:none;-webkit-user-select:none;';
@@ -1002,7 +1007,7 @@ def finish(fig, low_label):
     fig.add_annotation(xref="paper", yref="paper", x=0.01, y=fig.layout.yaxis2.domain[1],
                        xanchor="left", yanchor="top", showarrow=False,
                        text=low_label, font=dict(size=11, color="#555"))
-    fig.update_layout(height=620, margin=dict(l=4, r=max(66, 12 + 7 * len(px(last, DEC))), t=(100 if idx_arr is not None else 40), b=22),
+    fig.update_layout(height=620, margin=dict(l=4, r=max(66, 12 + 7 * len(px(last, DEC))), t=26, b=22),
                       showlegend=False, bargap=0.05, hovermode=False, dragmode=False,
                       xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False,
                       plot_bgcolor="white", paper_bgcolor="white")
