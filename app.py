@@ -257,48 +257,81 @@ def timing_html(parts) -> str:
     return '<span class="tm">⏱ ' + " · ".join(out) + "</span>"
 
 
-# ───────────── 오늘 고가·저가가 나온 시각 ─────────────
-# 하루는 한국시간 오전 9시에 시작 → 시가 시각은 항상 09:00
-# 60분봉으로 몇 시인지 찾고, 그 1시간의 1분봉으로 몇 분인지 찾음 (코인 하나에 요청 최대 3번)
+# ───────────── 오늘 시가·고가·저가가 나온 시각 ─────────────
+# 거래소마다 '하루' 시작이 다름 (업비트 오전 9시, 빗썸은 다를 수 있음) → 최신 일봉의 시작 시각을 시가 시각으로 사용
+# 고가·저가: 60분봉에서 리스트의 고가·저가와 똑같은 값이 나온 시간을 찾고, 그 1시간의 1분봉에서 몇 분인지 찾음
 def _kst(c) -> pd.Timestamp:
     return pd.Timestamp(c["candle_date_time_kst"])
 
 
-@st.cache_data(ttl=300, show_spinner=False)     # 5분 동안 저장
-def hl_times(key: str):
-    """{'h': '03:15', 'l': '10:42'} — 못 구하면 빈 칸"""
-    xch, m = key.split(":", 1)
+def _same(a, b) -> bool:
+    return a is not None and b is not None and abs(a - b) <= max(abs(b), 1e-12) * 1e-9
+
+
+def _minutes_of_hour(xch: str, m: str, t: pd.Timestamp) -> list:
+    """t(한국시간)부터 1시간 동안의 1분봉. 거래소마다 'to' 표기가 달라 몇 가지 방식으로 시도하고,
+    실제로 그 1시간 안의 캔들만 골라 씀"""
+    def inside(lst):
+        return [c for c in lst if t <= _kst(c) < t + pd.Timedelta(hours=1)]
     now = pd.Timestamp.now(tz="Asia/Seoul").tz_localize(None)
-    s0 = now.normalize() + pd.Timedelta(hours=9)
-    if now < s0:
-        s0 -= pd.Timedelta(days=1)                 # 오전 9시 전이면 어제 9시부터가 '오늘'
-    hours = [c for c in _get(xch, f"/v1/candles/minutes/60", {"market": m, "count": 25}) if _kst(c) >= s0]
+    if now - t < pd.Timedelta(minutes=190):                 # 최근 3시간 안이면 'to' 없이 최근 200개로 충분
+        got = inside(_get(xch, "/v1/candles/minutes/1", {"market": m, "count": 200}))
+        if got:
+            return got
+    end_kst = t + pd.Timedelta(hours=1)
+    end_utc = end_kst - pd.Timedelta(hours=9)
+    for to in (end_utc.strftime("%Y-%m-%dT%H:%M:%S"), end_utc.strftime("%Y-%m-%d %H:%M:%S"),
+               end_kst.strftime("%Y-%m-%dT%H:%M:%S+09:00"), end_kst.strftime("%Y-%m-%d %H:%M:%S")):
+        try:
+            got = inside(_get(xch, "/v1/candles/minutes/1", {"market": m, "count": 60, "to": to}))
+            if got:
+                return got
+        except Exception:
+            continue
+    return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)     # 5분 동안 저장 (고가·저가 값이 바뀌면 새로 구함)
+def hl_times(key: str, hi=None, lo=None):
+    """{'o': '09:00', 'h': '03:15', 'l': '10:42'} — 못 구한 칸은 빈 칸"""
+    xch, m = key.split(":", 1)
     out = {}
+    s0 = None
+    try:
+        day = _get(xch, "/v1/candles/days", {"market": m, "count": 1})
+        s0 = _kst(day[0])
+        out["o"] = s0.strftime("%H:%M")
+    except Exception:
+        pass
+    hours = _get(xch, "/v1/candles/minutes/60", {"market": m, "count": 25})
     if not hours:
         return out
-    for k, f, pick in (("h", "high_price", max), ("l", "low_price", min)):
-        hc = pick(hours, key=lambda c: _num(c.get(f)) or (0 if pick is max else 1e30))
+    win = [c for c in hours if s0 is None or _kst(c) >= s0] or hours
+    for k, f, pick, target in (("h", "high_price", max, hi), ("l", "low_price", min, lo)):
+        hit = [c for c in hours if _same(_num(c.get(f)), target)]      # 리스트 값과 같은 시간(가장 최근)
+        hc = hit[0] if hit else pick(win, key=lambda c: _num(c.get(f)) or (0 if pick is max else 1e30))
         t = _kst(hc)
-        try:                                       # 그 1시간 안에서 1분봉으로 정확한 분 찾기
-            to = (pd.Timestamp(hc["candle_date_time_utc"]) + pd.Timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
-            mins = [c for c in _get(xch, "/v1/candles/minutes/1", {"market": m, "count": 60, "to": to})
-                    if t <= _kst(c) < t + pd.Timedelta(hours=1)]
+        try:
+            mins = _minutes_of_hour(xch, m, t)
             if mins:
-                t = _kst(pick(mins, key=lambda c: _num(c.get(f)) or (0 if pick is max else 1e30)))
+                mhit = [c for c in mins if _same(_num(c.get(f)), target or _num(hc.get(f)))]
+                mc = mhit[-1] if mhit else pick(mins, key=lambda c: _num(c.get(f)) or (0 if pick is max else 1e30))
+                t = _kst(mc)
         except Exception:
             pass
         out[k] = t.strftime("%H:%M")
     return out
 
 
-def all_hl_times(codes: tuple, timeout: float = 20) -> dict:
-    """리스트 코인들의 고가·저가 시각을 동시에 구함 (20초 안에 못 구한 코인은 빈 칸)"""
+def all_hl_times(items: tuple, timeout: float = 20) -> dict:
+    """리스트 코인들의 시가·고가·저가 시각을 동시에 구함. items = ((키, 고가, 저가), ...)
+    20초 안에 못 구한 코인은 빈 칸"""
     from concurrent.futures import wait
     ex = ThreadPoolExecutor(max_workers=3)
-    futs = {ex.submit(hl_times, c): c for c in codes}
+    futs = {ex.submit(hl_times, k, hi, lo): k for k, hi, lo in items}
     wait(futs, timeout=timeout)
     ex.shutdown(wait=False, cancel_futures=True)
-    return {c: f.result() for f, c in futs.items() if f.done() and not f.exception()}
+    return {k: f.result() for f, k in futs.items() if f.done() and not f.exception()}
 
 
 def list_signals(codes: tuple):
@@ -459,7 +492,7 @@ if not qp.get("code"):
                 f'<td class="{k}">{a}{arrow}{px(None if chg is None else abs(chg), d)}</a></td>'
                 f'<td class="{k}">{a}{pct_t}</a></td>'
                 f'<td class="tv">{a}{money(tv)}</a></td>'
-                f'<td class="{ud(op, prev)}">{a}{px(op, d)}{when("09:00")}</a></td>'
+                f'<td class="{ud(op, prev)}">{a}{px(op, d)}{when(tt.get("o"))}</a></td>'
                 f'<td class="{ud(hi, prev)}">{a}{px(hi, d)}{when(tt.get("h"))}</a></td>'
                 f'<td class="{ud(lo, prev)}">{a}{px(lo, d)}{when(tt.get("l"))}</a></td></tr>')
         h.append('</tbody></table></div>')
@@ -475,7 +508,7 @@ if not qp.get("code"):
         note.caption("⏳ 매수·매도 신호를 계산하는 중입니다… (처음 한 번은 조금 걸려요)")
     _t0 = time.time()
     _hx = ThreadPoolExecutor(max_workers=1)                  # 고가·저가 시각은 신호 계산과 동시에 구함
-    _hf = _hx.submit(all_hl_times, codes)
+    _hf = _hx.submit(all_hl_times, tuple((f"{XCH}:{r[0]}", r[7], r[8]) for r in rows))
     try:
         sig, _got, t_fetch, t_calc = list_signals(codes)
     except Exception as e:
@@ -491,7 +524,7 @@ if not qp.get("code"):
     _hx.shutdown(wait=False)
     _tm = timing_html([("리스트", t_list), ("시세", t_fetch), ("계산", t_calc), ("전체", time.time() - _t0)])
     ph.markdown(build(sig, _tm, hm), unsafe_allow_html=True)      # ② 신호 칸 + 걸린 시간 채워서 표시
-    st.caption("※ 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. 일봉은 한국시간 오전 9시 기준이라 시가 시각은 항상 09:00입니다.")
+    st.caption("※ 스테이블코인(USDT·USDC 등)은 가격이 거의 고정이라 순위에서 뺐습니다. (시간)은 그 값이 나온 한국시간이며, 시가 시간은 거래소의 하루 시작 시각입니다.")
     st.stop()
 
 
