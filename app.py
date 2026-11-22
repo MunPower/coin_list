@@ -757,7 +757,7 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
   outer.appendChild(bcol);
   function bk(css){var d=HD.createElement('div'); d.style.cssText='display:none;'+css; box.appendChild(d); return d;}
   var sm=bk('font:600 12px sans-serif;white-space:nowrap;');                 // 비교 코인 대비 요약
-  var dt=bk('font:11px sans-serif;color:#666;white-space:normal;line-height:1.35;');   // 시가·저가·종가·비교 코인
+  var dt=bk('font:11px sans-serif;color:#666;white-space:normal;word-break:keep-all;line-height:1.35;');   // 줄바꿈은 띄어쓰기에서만   // 시가·저가·종가·비교 코인
   var ig=bk('font:600 11px sans-serif;color:#00a651;white-space:nowrap;');   // 비교 코인 값(녹색)
   if(IDX){sm.style.display='block'; dt.style.display='block'; ig.style.display='block';}
   var brow=HD.createElement('div');
@@ -766,6 +766,18 @@ function installCrosshair(gd, initSpan, S, B, IDX, IT, IDXNAME, IDXRAW, OPEN, LO
     +'<span style="color:#e5484d">▮</span><span style="color:#3b6fd4">▮</span> 종가 캔들&nbsp; ━ 곡선&nbsp; '
     +'<span style="color:#1a56db">━ 상한</span>&nbsp; <span style="color:#e5484d">━ 하한</span></span>';
   box.appendChild(brow);
+  // 폰(폭 600px 이하): 글씨는 오른쪽 끝까지 넓게 쓰고, 맨 아래 줄은 [범례 ……… 버튼]으로 배치
+  var narrow=false;
+  try{ narrow=Math.min(window.screen&&window.screen.width||9999, (HD.defaultView||window).innerWidth||9999)<=600; }catch(en){}
+  if(narrow){
+    outer.style.flexDirection='column'; outer.style.alignItems='stretch'; outer.style.gap='4px';
+    box.style.width='100%';
+    var lastRow=HD.createElement('div');
+    lastRow.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;';
+    outer.appendChild(lastRow);
+    lastRow.appendChild(brow); lastRow.appendChild(bcol);
+    brow.style.marginTop='0';
+  }
   var focus=N-1;           // 십자선이 가리키는 날짜(없으면 맨 오른쪽=최근)
   function sg(v){return (v>=0?'+':'')+v.toFixed(1)+'%';}
   function md(i){return cats[i].slice(5);}
